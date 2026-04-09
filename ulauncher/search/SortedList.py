@@ -43,14 +43,18 @@ class SortedList:
             self.append(item)
 
     def append(self, result_item):
-        # get_search_name() returns a string with the app display name, but it may contain a
-        # second line in which case that line is the name of the executable
+        # get_search_name() returns a string with the app display name, optionally followed by
+        # the executable name and keywords on subsequent lines
         search_fields = result_item.get_search_name()
-        name, exec_name, *_ = '{}\n'.format(search_fields).split('\n')
-        score = max(
+        name, exec_name, *keywords = '{}\n'.format(search_fields).split('\n')
+        scores = [
             get_score(self._query, name),
-            get_score(self._query, exec_name) * .8
-        )
+            get_score(self._query, exec_name) * .8,
+        ]
+        for kw in keywords:
+            if kw:
+                scores.append(get_score(self._query, kw) * .8)
+        score = max(scores)
 
         if score >= self._min_score:
             result_item.score = -score  # use negative to sort by score in desc. order

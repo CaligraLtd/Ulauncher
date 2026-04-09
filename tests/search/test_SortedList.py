@@ -73,3 +73,11 @@ class TestSortedList:
         assert ri6 in res_list
 
         assert res_list[0] == ri5  # ri5 stays first, because it has the highest score (100)
+
+    def test_append_scores_keywords(self, res_list):
+        """Items with keywords in search_name should be matched and scored"""
+        ri = self.result_item()
+        ri.get_search_name.return_value = '1Password\n1password\nPassword Manager\nVault'
+        res_list = SortedList('password manager', min_score=40, limit=3)
+        res_list.append(ri)
+        assert ri in res_list

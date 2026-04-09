@@ -70,6 +70,7 @@ class AppDb:
         """
         name = app.get_string('X-GNOME-FullName') or app.get_name()
         exec_name = get_exec_name(app.get_string('Exec') or '')
+        keywords = app.get_keywords() or []
         description = app.get_description() or ''
         if not description and (app.get_generic_name() != name):
             description = app.get_generic_name() or ''
@@ -78,7 +79,7 @@ class AppDb:
             "desktop_file_short": os.path.basename(app.get_filename()),
             "description": app.get_description() or '',
             "name": name,
-            "search_name": search_name(name, exec_name)
+            "search_name": search_name(name, exec_name, keywords)
         }
         self._app_icon_cache.add_icon(record['desktop_file'], app.get_icon(), app.get_string('Icon'))
 
@@ -164,9 +165,10 @@ def get_exec_name(exec):
     return match.group('bin') if match else ""
 
 
-def search_name(name, exec_name):
+def search_name(name, exec_name, keywords=None):
     """
     Returns string that will be used for search
-    We want to make sure app can be searchable by its exec_line
+    We want to make sure app can be searchable by its exec_line and keywords
     """
-    return '{}\n{}'.format(name, exec_name)
+    parts = [name, exec_name] + (keywords or [])
+    return '\n'.join(parts)

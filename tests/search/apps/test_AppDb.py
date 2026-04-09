@@ -121,6 +121,7 @@ class TestAppDb:
         app.get_string.return_value = None
         app.get_name.return_value = 'name_test1'
         app.get_description.return_value = 'description_test1'
+        app.get_keywords.return_value = ['Password Manager', 'Vault']
 
         app_db.put_app(app)
 
@@ -129,7 +130,7 @@ class TestAppDb:
             'desktop_file_short': 'file_name_test1',
             'name': 'name_test1',
             'description': 'description_test1',
-            'search_name': 'name_test1\n',
+            'search_name': 'name_test1\n\nPassword Manager\nVault',
             'icon': app_icon_cache.get_pixbuf.return_value
         }
 
@@ -185,3 +186,6 @@ def test_search_name():
     assert search_name('Mouse & Touchpad', 'unity-control-center') == 'Mouse & Touchpad\nunity-control-center'
     assert search_name('Back Up', 'deja-dup') == 'Back Up\ndeja-dup'
     assert search_name('Calendar', 'gnome-calendar') == 'Calendar\ngnome-calendar'
+    assert search_name('1Password', '1password', ['Password Manager', 'Vault']) == \
+        '1Password\n1password\nPassword Manager\nVault'
+    assert search_name('Firefox', 'firefox', []) == 'Firefox\nfirefox'
