@@ -22,6 +22,7 @@ class TestAppNotifyEventHandler:
     def event(self, mocker):
         event = mock.create_autospec(pyinotify.Event)
         event.pathname = 'file.desktop'
+        event.dir = False
         find_desktop_files = mocker.patch('ulauncher.search.apps.app_watcher.find_desktop_files')
         find_desktop_files.return_value = [event.pathname]
         return event
@@ -105,3 +106,51 @@ class TestAppNotifyEventHandler:
         event_handler.process_IN_MOVED_TO(event)
         sleep(.06)
         db.put_app.assert_called_with(app)
+
+    def test_watch_desktop_dirs_watches_parents_too(self, event_handler, mocker, tmp_path):
+        """
+        A desktop dir can be deleted and recreated, which destroys its watch, so the
+        parent has to be watched to hear about the replacement
+        """
+        desktop_dir = tmp_path / 'share' / 'applications'
+        desktop_dir.mkdir(parents=True)
+        mocker.patch('ulauncher.search.apps.app_watcher.DESKTOP_DIRS', [str(desktop_dir)])
+        watch_manager = mock.create_autospec(pyinotify.WatchManager)
+
+        event_handler.watch_desktop_dirs(watch_manager, 42)
+
+        watch_manager.add_watch.assert_any_call([str(desktop_dir)], 42, rec=True, auto_add=True)
+        watch_manager.add_watch.assert_any_call([str(tmp_path / 'share')],
+                                                pyinotify.IN_CREATE | pyinotify.IN_MOVED_TO)
+
+    def test_on_created_dir_watches_desktop_dir_again(self, event_handler, event, db, app, mocker):
+        """
+        A recreated desktop dir gets a fresh watch, and files already inside it are indexed
+        instead of waiting for events that will never arrive
+        """
+        mocker.patch('ulauncher.search.apps.app_watcher.DESKTOP_DIRS', ['/data/applications'])
+        find_desktop_files = mocker.patch('ulauncher.search.apps.app_watcher.find_desktop_files')
+        find_desktop_files.return_value = ['/data/applications/file.desktop']
+        watch_manager = mock.create_autospec(pyinotify.WatchManager)
+        event_handler.watch_desktop_dirs(watch_manager, 42)
+
+        event.dir = True
+        event.pathname = '/data/applications'
+        event_handler.process_IN_CREATE(event)
+
+        watch_manager.add_watch.assert_called_with('/data/applications', 42, rec=True, auto_add=True)
+        sleep(.06)
+        db.put_app.assert_called_with(app)
+
+    def test_on_created_dir_ignores_dirs_that_are_not_desktop_dirs(self, event_handler, event, db, mocker):
+        mocker.patch('ulauncher.search.apps.app_watcher.DESKTOP_DIRS', ['/data/applications'])
+        watch_manager = mock.create_autospec(pyinotify.WatchManager)
+        event_handler.watch_desktop_dirs(watch_manager, 42)
+        watch_manager.reset_mock()
+
+        event.dir = True
+        event.pathname = '/data/some-other-dir'
+        event_handler.process_IN_CREATE(event)
+
+        assert not watch_manager.add_watch.called
+        assert not db.put_app.called

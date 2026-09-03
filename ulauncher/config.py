@@ -24,7 +24,12 @@ CACHE_DIR = os.path.join(xdg_cache_home, 'ulauncher_cache')
 CONFIG_DIR = os.path.join(xdg_config_home, 'ulauncher')
 SETTINGS_FILE_PATH = os.path.join(CONFIG_DIR, 'settings.json')
 # spec: https://specifications.freedesktop.org/menu-spec/latest/ar01s02.html
-DESKTOP_DIRS = list(filter(os.path.exists, [os.path.join(dir, "applications") for dir in xdg_data_dirs]))
+# Deliberately not filtered by existence: a desktop dir can be created, or deleted and
+# recreated, while Ulauncher is running -- package managers prune empty directories. The
+# watcher needs these paths so it can watch one again when it reappears, and
+# find_desktop_files() needs them to resolve overrides. Consumers walk the paths, which
+# yields nothing for a dir that is absent.
+DESKTOP_DIRS = [os.path.join(dir, "applications") for dir in xdg_data_dirs]
 EXTENSIONS_DIR = os.path.join(DATA_DIR, 'extensions')
 EXT_PREFERENCES_DIR = os.path.join(CONFIG_DIR, 'ext_preferences')
 ULAUNCHER_APP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))

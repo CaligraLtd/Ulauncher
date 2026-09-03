@@ -2,7 +2,7 @@ import os
 import logging
 from time import time, sleep
 from functools import wraps
-from typing import Dict
+from typing import Dict, Optional
 
 import pyinotify
 
@@ -15,6 +15,13 @@ from ulauncher.config import DESKTOP_DIRS
 logger = logging.getLogger(__name__)
 
 
+def _is_desktop_file(pathname: str) -> bool:
+    """
+    :returns: True if `pathname` looks like a `*.desktop` file
+    """
+    return os.path.splitext(pathname)[1] == '.desktop'
+
+
 def _only_desktop_files(func):
     """
     Decorator for pyinotify.ProcessEvent
@@ -23,7 +30,7 @@ def _only_desktop_files(func):
 
     @wraps(func)
     def decorator_func(self, event, *args, **kwargs):
-        if os.path.splitext(event.pathname)[1] == '.desktop':
+        if _is_desktop_file(event.pathname):
             return func(self, event, *args, **kwargs)
         return None
 
@@ -53,6 +60,9 @@ class AppNotifyEventHandler(pyinotify.ProcessEvent):
 
         # key is a file path, value is an addition time
         self._deferred_files = {}  # type: DeferredFiles
+        # set by watch_desktop_dirs() so a desktop dir can be watched again if it reappears
+        self._watch_manager: Optional[pyinotify.WatchManager] = None
+        self._watch_mask = 0
         self._init_worker()
 
     @run_async(daemon=True)
@@ -139,13 +149,60 @@ class AppNotifyEventHandler(pyinotify.ProcessEvent):
         self.__db.remove_by_path(pathname)
         logger.info('App was removed (%s)', pathname)
 
-    @_only_desktop_files
+    def watch_desktop_dirs(self, watch_manager, mask: int) -> None:
+        """
+        Watch every desktop dir that exists, and the parent of every desktop dir we know of.
+
+        The parent watches are what make this survive a desktop dir being created after
+        startup, or deleted and recreated while we run. inotify watches an inode rather than
+        a path, so a deleted dir takes its watch with it and the replacement is invisible
+        until a new watch is added.
+        """
+        self._watch_manager = watch_manager
+        self._watch_mask = mask
+
+        existing_dirs = [path for path in DESKTOP_DIRS if os.path.isdir(path)]
+        if existing_dirs:
+            watch_manager.add_watch(existing_dirs, mask, rec=True, auto_add=True)
+
+        # Not recursive, and creation events only -- all we need to hear about is the
+        # desktop dir itself reappearing.
+        parent_dirs = sorted({os.path.dirname(path) for path in DESKTOP_DIRS
+                              if os.path.isdir(os.path.dirname(path))})
+        if parent_dirs:
+            # pylint: disable=no-member
+            watch_manager.add_watch(parent_dirs, pyinotify.IN_CREATE | pyinotify.IN_MOVED_TO)
+
+    def _watch_desktop_dir_again(self, pathname: str) -> None:
+        """
+        Give a desktop dir that just appeared a fresh watch, and index what is already in it
+        """
+        if self._watch_manager is None or pathname not in DESKTOP_DIRS:
+            return
+
+        logger.info('Desktop dir appeared, watching it again (%s)', pathname)
+        self._watch_manager.add_watch(pathname, self._watch_mask, rec=True, auto_add=True)
+
+        # Files can land between the dir being created and the watch being added, so take
+        # what is there now instead of relying on events alone.
+        for pathname_in_dir in find_desktop_files([pathname]):
+            self.add_file_deferred(pathname_in_dir)
+
     def process_IN_CREATE(self, event):
-        self.add_file_deferred(event.pathname)
+        if event.dir:
+            self._watch_desktop_dir_again(event.pathname)
+        elif _is_desktop_file(event.pathname):
+            self.add_file_deferred(event.pathname)
 
     @_only_desktop_files
     def process_IN_DELETE(self, event):
         self._remove_file(event.pathname)
+
+    def process_IN_DELETE_SELF(self, event):
+        # Logged because the watch is now gone: without this the app silently disappears
+        # from results and nothing in the log says why.
+        if event.pathname in DESKTOP_DIRS:
+            logger.info('Desktop dir was removed, waiting for it to reappear (%s)', event.pathname)
 
     @_only_desktop_files
     def process_IN_MODIFY(self, event):
@@ -155,9 +212,11 @@ class AppNotifyEventHandler(pyinotify.ProcessEvent):
     def process_IN_MOVED_FROM(self, event):
         self._remove_file(event.pathname)
 
-    @_only_desktop_files
     def process_IN_MOVED_TO(self, event):
-        self.add_file_deferred(event.pathname)
+        if event.dir:
+            self._watch_desktop_dir_again(event.pathname)
+        elif _is_desktop_file(event.pathname):
+            self.add_file_deferred(event.pathname)
 
 
 @run_async(daemon=True)
@@ -181,5 +240,5 @@ def start():
     notifier.start()
     # pylint: disable=no-member
     mask = pyinotify.IN_CREATE | pyinotify.IN_DELETE | pyinotify.IN_MODIFY | \
-        pyinotify.IN_MOVED_FROM | pyinotify.IN_MOVED_TO
-    wm.add_watch(DESKTOP_DIRS, mask, rec=True, auto_add=True)
+        pyinotify.IN_MOVED_FROM | pyinotify.IN_MOVED_TO | pyinotify.IN_DELETE_SELF
+    handler.watch_desktop_dirs(wm, mask)
